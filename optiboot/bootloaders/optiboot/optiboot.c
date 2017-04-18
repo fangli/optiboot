@@ -266,6 +266,7 @@ optiboot_version = 256*(OPTIBOOT_MAJVER + OPTIBOOT_CUSTOMVER) + OPTIBOOT_MINVER;
  * stk500.h contains the constant definitions for the stk500v1 comm protocol
  */
 #include "stk500.h"
+#include "zigbee.h"
 
 #ifndef LED_START_FLASHES
 #define LED_START_FLASHES 0
@@ -442,6 +443,9 @@ void appStart(uint8_t rstFlags) __attribute__ ((naked));
 #define appstart_vec (0)
 #endif // VIRTUAL_BOOT_PARTITION
 
+uint8_t zigbee_sizeleft = 0;
+uint8_t zigbee_server_addr1 = 0x0;
+uint8_t zigbee_server_addr2 = 0x0;
 
 /* main program starts here */
 int main(void) {
@@ -684,7 +688,7 @@ int main(void) {
   }
 }
 
-void putch(char ch) {
+void putch_raw(char ch) {
 #ifndef SOFT_UART
   while (!(UART_SRA & _BV(UDRE0)));
   UART_UDR = ch;
@@ -714,7 +718,26 @@ void putch(char ch) {
 #endif
 }
 
-uint8_t getch(void) {
+void putch(char ch) {
+  putch_raw(0xFE);
+  putch_raw(0x05);
+  putch_raw(0x80);
+  putch_raw(0x80);
+  putch_raw(zigbee_server_addr1);
+  putch_raw(zigbee_server_addr2);
+  if (ch == 0xFF) {
+    putch_raw(0xFE);
+    putch_raw(0xFD);
+  } else if (ch == 0xFE) {
+    putch_raw(0xFE);
+    putch_raw(0xFC);    
+  } else {
+    putch_raw(ch);
+  }
+  putch_raw(0xFF);
+}
+
+uint8_t getch_raw(void) {
   uint8_t ch;
 
 #ifdef LED_DATA_FLASH
@@ -777,6 +800,42 @@ uint8_t getch(void) {
 #endif
 
   return ch;
+}
+
+uint8_t getch_payload(void) {
+  uint8_t ret = getch_raw();
+  zigbee_sizeleft--;
+
+  if (ret == ZIGBEE_SPECIAL) {
+    if (getch_raw() == 0xFD) {
+      ret = 0xFF;
+    } else {
+      ret = 0xFE;
+    }
+  }
+
+  if (zigbee_sizeleft == 0) {
+    getch_raw();
+  }
+
+  return ret;
+}
+
+uint8_t getch(void) {
+  if (zigbee_sizeleft == 0) {
+    getch_raw();
+    zigbee_sizeleft = getch_raw() - 4;
+    getch_raw();
+    getch_raw();
+    if ((zigbee_server_addr1 == 0) && (zigbee_server_addr2 == 0)) {
+      zigbee_server_addr1 = getch_raw();
+      zigbee_server_addr2 = getch_raw();
+    } else {
+      getch_raw();
+      getch_raw();
+    }
+  }
+  return getch_payload();
 }
 
 #ifdef SOFT_UART
